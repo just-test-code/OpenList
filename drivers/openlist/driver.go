@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -58,7 +57,7 @@ func (d *OpenList) Init(ctx context.Context) error {
 	}
 	if resp.Data.Role == model.GUEST {
 		u := d.Address + "/api/public/settings"
-		res, err := base.RestyClient.R().Get(u)
+		_, err := base.RestyClient.R().Get(u)
 		if err != nil {
 			return err
 		}
