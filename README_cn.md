@@ -1,5 +1,5 @@
 <div align="center">
-  <img style="width: 128px; height: 128px;" src="https://raw.githubusercontent.com/OpenListTeam/Logo/main/logo.svg" alt="logo" />
+  <img src="https://raw.githubusercontent.com/OpenListTeam/Logo/main/logo.svg" width="128" height="128" alt="logo" />
 
   <p><em>OpenList 是一个有韧性、长期治理、社区驱动的 AList 分支，旨在防御基于信任的开源攻击。</em></p>
 
@@ -64,7 +64,9 @@ OpenList 是一个由 OpenList 团队独立维护的开源项目，遵循 AGPL-3
   - [x] [又拍云对象存储](https://www.upyun.com/products/file-storage)
   - [x] [WebDAV](https://en.wikipedia.org/wiki/WebDAV)
   - [x] Teambition([中国](https://www.teambition.com), [国际](https://us.teambition.com))
+  - [x] [MediaFire](https://www.mediafire.com)
   - [x] [分秒帧](https://www.mediatrack.cn)
+  - [x] [ProtonDrive](https://proton.me/drive)
   - [x] [和彩云](https://yun.139.com)（个人、家庭、群组）
   - [x] [YandexDisk](https://disk.yandex.com)
   - [x] [百度网盘](http://pan.baidu.com)
@@ -74,7 +76,6 @@ OpenList 是一个由 OpenList 团队独立维护的开源项目，遵循 AGPL-3
   - [x] [迅雷网盘](https://pan.xunlei.com)
   - [x] [蓝奏云](https://www.lanzou.com)
   - [x] [蓝奏云优享版](https://www.ilanzou.com)
-  - [x] [阿里云盘分享](https://www.alipan.com)
   - [x] [Google 相册](https://photos.google.com)
   - [x] [Mega.nz](https://mega.nz)
   - [x] [百度相册](https://photo.baidu.com)
@@ -85,6 +86,15 @@ OpenList 是一个由 OpenList 团队独立维护的开源项目，遵循 AGPL-3
   - [x] [飞机盘](https://www.feijipan.com)
   - [x] [多吉云](https://www.dogecloud.com/product/oss)
   - [x] [Azure Blob Storage](https://azure.microsoft.com/products/storage/blobs)
+  - [x] [超星](https://www.chaoxing.com)
+  - [x] [CNB](https://cnb.cool/)
+  - [x] [Degoo](https://degoo.com)
+  - [x] [豆包](https://www.doubao.com)
+  - [x] [Febbox](https://www.febbox.com)
+  - [x] [GitHub](https://github.com)
+  - [x] [OpenList](https://github.com/OpenListTeam/OpenList)
+  - [x] [Teldrive](https://github.com/tgdrive/teldrive)
+  - [x] [微云](https://www.weiyun.com)
 - [x] 部署方便，开箱即用
 - [x] 文件预览（PDF、markdown、代码、纯文本等）
 - [x] 画廊模式下的图片预览
@@ -106,17 +116,31 @@ OpenList 是一个由 OpenList 团队独立维护的开源项目，遵循 AGPL-3
 
 ## 文档
 
-- 🌏 [国内站点](https://doc.oplist.org.cn)
-- 📘 [海外站点](https://doc.oplist.org)
-- 📚 [备用站点](https://doc.openlist.team)
+- 📘 [文档](https://doc.oplist.org)
+- 🌏 [中国镜像](https://doc.oplist.org.cn)
+- ⚖️ [使用条款](https://doc.oplist.org/terms)
+- 🔒 [隐私政策](https://doc.oplist.org/privacy)
 
-## 演示
+## Demo
 
-N/A（待重建）
+- 🌎 [全球 Demo](https://demo.oplist.org)
+- 🇨🇳 [中国 Demo](https://demo.oplist.org.cn)
 
 ## 讨论
 
 如有一般性问题请前往 [*Discussions*](https://github.com/OpenListTeam/OpenList/discussions) 讨论区，***Issues* 仅用于错误报告和功能请求。**
+
+## 赞助者
+
+[![VPS.Town](https://vps.town/static/images/sponsor.png)](https://vps.town "VPS.Town - Trust, Effortlessly. Your Cloud, Reimagined.")
+
+## 捐赠者
+
+感谢以下捐赠者的慷慨支持：
+
+- [HisAtri](https://github.com/HisAtri)
+- 爱发电用户_7jTh
+- suka
 
 ## 许可证
 

@@ -22,11 +22,14 @@ func StoragesLoaded(c *gin.Context) {
 				return
 			}
 		}
-		common.ErrorStrResp(c, "Loading storage, please wait", 500)
-		c.Abort()
-		return
+		select {
+		case <-conf.StoragesLoadSignal():
+		case <-c.Request.Context().Done():
+			c.Abort()
+			return
+		}
 	}
-	common.GinWithValue(c,
+	common.GinAppendValues(c,
 		conf.ApiUrlKey, common.GetApiUrlFromRequest(c.Request),
 	)
 	c.Next()

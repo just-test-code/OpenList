@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/OpenListTeam/OpenList/v4/server/common"
 	"github.com/OpenListTeam/OpenList/v4/server/ftp"
 	"github.com/OpenListTeam/OpenList/v4/server/sftp"
 	"github.com/OpenListTeam/sftpd-openlist"
@@ -23,10 +25,11 @@ type SftpDriver struct {
 }
 
 func NewSftpDriver() (*SftpDriver, error) {
+	ftp.InitStage()
 	sftp.InitHostKey()
 	return &SftpDriver{
 		proxyHeader: http.Header{
-			"User-Agent": {setting.GetStr(conf.FTPProxyUserAgent)},
+			"User-Agent": {base.UserAgent},
 		},
 	}, nil
 }
@@ -35,10 +38,14 @@ func (d *SftpDriver) GetConfig() *sftpd.Config {
 	if d.config != nil {
 		return d.config
 	}
+	var pwdAuth func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) = nil
+	if !setting.GetBool(conf.SFTPDisablePasswordLogin) {
+		pwdAuth = d.PasswordAuth
+	}
 	serverConfig := ssh.ServerConfig{
 		NoClientAuth:         true,
 		NoClientAuthCallback: d.NoClientAuth,
-		PasswordCallback:     d.PasswordAuth,
+		PasswordCallback:     pwdAuth,
 		PublicKeyCallback:    d.PublicKeyAuth,
 		AuthLogCallback:      d.AuthLogCallback,
 		BannerCallback:       d.GetBanner,
@@ -50,7 +57,7 @@ func (d *SftpDriver) GetConfig() *sftpd.Config {
 		ServerConfig: serverConfig,
 		HostPort:     conf.Conf.SFTP.Listen,
 		ErrorLogFunc: utils.Log.Error,
-		//DebugLogFunc: utils.Log.Debugf,
+		// DebugLogFunc: utils.Log.Debugf,
 	}
 	return d.config
 }
@@ -86,17 +93,31 @@ func (d *SftpDriver) NoClientAuth(conn ssh.ConnMetadata) (*ssh.Permissions, erro
 }
 
 func (d *SftpDriver) PasswordAuth(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+	ip := conn.RemoteAddr().String()
+	count, ok := model.LoginCache.Get(ip)
+	if ok && count >= model.DefaultMaxAuthRetries {
+		model.LoginCache.Expire(ip, model.DefaultLockDuration)
+		return nil, errors.New("Too many unsuccessful sign-in attempts have been made using an incorrect username or password, Try again later.")
+	}
+	pass := string(password)
 	userObj, err := op.GetUserByName(conn.User())
+	if err == nil {
+		err = userObj.ValidateRawPassword(pass)
+		if err != nil && setting.GetBool(conf.LdapLoginEnabled) && userObj.AllowLdap {
+			err = common.HandleLdapLogin(conn.User(), pass)
+		}
+	} else if setting.GetBool(conf.LdapLoginEnabled) && model.CanFTPAccess(int32(setting.GetInt(conf.LdapDefaultPermission, 0))) {
+		userObj, err = tryLdapLoginAndRegister(conn.User(), pass)
+	}
 	if err != nil {
+		model.LoginCache.Set(ip, count+1)
 		return nil, err
 	}
 	if userObj.Disabled || !userObj.CanFTPAccess() {
+		model.LoginCache.Set(ip, count+1)
 		return nil, errors.New("user is not allowed to access via SFTP")
 	}
-	passHash := model.StaticHash(string(password))
-	if err = userObj.ValidatePwdStaticHash(passHash); err != nil {
-		return nil, err
-	}
+	model.LoginCache.Del(ip)
 	return nil, nil
 }
 

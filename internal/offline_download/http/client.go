@@ -5,11 +5,11 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/offline_download/tool"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
@@ -58,6 +58,7 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", base.UserAgent)
 	if streamPut {
 		req.Header.Set("Range", "bytes=0-")
 	}
@@ -71,11 +72,11 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 	}
 	filename, err := parseFilenameFromContentDisposition(resp.Header.Get("Content-Disposition"))
 	if err != nil {
-		filename = path.Base(resp.Request.URL.Path)
+		filename, err = sanitizeFilename(resp.Request.URL.Path)
 	}
-	filename = strings.Trim(filename, "/")
-	if len(filename) == 0 {
-		filename = fmt.Sprintf("%s-%d-%x", strings.ReplaceAll(req.URL.Host, ".", "_"), time.Now().UnixMilli(), rand.Uint32())
+	if err != nil {
+		filename = strings.ReplaceAll(req.URL.Host, ":", "_")
+		filename = fmt.Sprintf("%s-%d-%x", filename, time.Now().UnixMilli(), rand.Uint32())
 	}
 	fileSize := resp.ContentLength
 	if streamPut {
@@ -89,8 +90,14 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 	}
 	task.SetTotalBytes(fileSize)
 	// save to temp dir
-	_ = os.MkdirAll(task.TempDir, os.ModePerm)
+	if err := os.MkdirAll(task.TempDir, os.ModePerm); err != nil {
+		return err
+	}
 	filePath := filepath.Join(task.TempDir, filename)
+	cleanTempDir := filepath.Clean(task.TempDir) + string(filepath.Separator)
+	if !strings.HasPrefix(filepath.Clean(filePath)+string(filepath.Separator), cleanTempDir) {
+		return fmt.Errorf("filename illegal")
+	}
 	file, err := os.Create(filePath)
 	if err != nil {
 		return err

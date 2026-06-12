@@ -23,7 +23,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/OpenListTeam/OpenList/v4/server/common"
 	"github.com/OpenListTeam/times"
-	cp "github.com/otiai10/copy"
 	log "github.com/sirupsen/logrus"
 	_ "golang.org/x/image/webp"
 )
@@ -51,7 +50,7 @@ func (d *Local) Config() driver.Config {
 
 func (d *Local) Init(ctx context.Context) error {
 	if d.MkdirPerm == "" {
-		d.mkdirPerm = 0777
+		d.mkdirPerm = 0o777
 	} else {
 		v, err := strconv.ParseUint(d.MkdirPerm, 8, 32)
 		if err != nil {
@@ -150,6 +149,7 @@ func (d *Local) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	}
 	return files, nil
 }
+
 func (d *Local) FileInfoToObj(ctx context.Context, f fs.FileInfo, reqPath string, fullPath string) model.Obj {
 	thumb := ""
 	if d.Thumbnail {
@@ -198,7 +198,7 @@ func (d *Local) Get(ctx context.Context, path string) (model.Obj, error) {
 	path = filepath.Join(d.GetRootPath(), path)
 	f, err := os.Stat(path)
 	if err != nil {
-		if strings.Contains(err.Error(), "cannot find the file") {
+		if os.IsNotExist(err) {
 			return nil, errs.ObjectNotFound
 		}
 		return nil, err
@@ -234,6 +234,7 @@ func (d *Local) Get(ctx context.Context, path string) (model.Obj, error) {
 func (d *Local) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	fullPath := file.GetPath()
 	link := &model.Link{}
+	var MFile model.File
 	if args.Type == "thumb" && utils.Ext(file.GetName()) != "svg" {
 		var buf *bytes.Buffer
 		var thumbPath *string
@@ -260,9 +261,9 @@ func (d *Local) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 				return nil, err
 			}
 			link.ContentLength = int64(stat.Size())
-			link.MFile = open
+			MFile = open
 		} else {
-			link.MFile = bytes.NewReader(buf.Bytes())
+			MFile = bytes.NewReader(buf.Bytes())
 			link.ContentLength = int64(buf.Len())
 		}
 	} else {
@@ -271,13 +272,11 @@ func (d *Local) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 			return nil, err
 		}
 		link.ContentLength = file.GetSize()
-		link.MFile = open
+		MFile = open
 	}
-	link.AddIfCloser(link.MFile)
-	if !d.Config().OnlyLinkMFile {
-		link.RangeReader = stream.GetRangeReaderFromMFile(link.ContentLength, link.MFile)
-		link.MFile = nil
-	}
+	link.SyncClosers.AddIfCloser(MFile)
+	link.RangeReader = stream.GetRangeReaderFromMFile(link.ContentLength, MFile)
+	link.RequireReference = link.SyncClosers.Length() > 0
 	return link, nil
 }
 
@@ -297,16 +296,9 @@ func (d *Local) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 		return fmt.Errorf("the destination folder is a subfolder of the source folder")
 	}
 	err := os.Rename(srcPath, dstPath)
-	if err != nil && strings.Contains(err.Error(), "invalid cross-device link") {
-		// 跨设备移动，先复制再删除
-		if err := d.Copy(ctx, srcObj, dstDir); err != nil {
-			return err
-		}
-		// 复制成功后直接删除源文件/文件夹
-		if srcObj.IsDir() {
-			return os.RemoveAll(srcObj.GetPath())
-		}
-		return os.Remove(srcObj.GetPath())
+	if isCrossDeviceError(err) {
+		// 跨设备移动，变更为移动任务
+		return errs.NotImplement
 	}
 	if err == nil {
 		srcParent := filepath.Dir(srcPath)
@@ -347,13 +339,12 @@ func (d *Local) Copy(_ context.Context, srcObj, dstDir model.Obj) error {
 	if utils.IsSubPath(srcPath, dstPath) {
 		return fmt.Errorf("the destination folder is a subfolder of the source folder")
 	}
-	// Copy using otiai10/copy to perform more secure & efficient copy
-	err := cp.Copy(srcPath, dstPath, cp.Options{
-		Sync:          true, // Sync file to disk after copy, may have performance penalty in filesystem such as ZFS
-		PreserveTimes: true,
-		PreserveOwner: true,
-	})
+	info, err := os.Lstat(srcPath)
 	if err != nil {
+		return err
+	}
+	// 复制regular文件会返回errs.NotImplement, 转为复制任务
+	if err = d.tryCopy(srcPath, dstPath, info); err != nil {
 		return err
 	}
 
@@ -374,11 +365,26 @@ func (d *Local) Remove(ctx context.Context, obj model.Obj) error {
 			err = os.Remove(obj.GetPath())
 		}
 	} else {
-		dstPath := filepath.Join(d.RecycleBinPath, obj.GetName())
-		if utils.Exists(dstPath) {
-			dstPath = filepath.Join(d.RecycleBinPath, obj.GetName()+"_"+time.Now().Format("20060102150405"))
+		objPath := obj.GetPath()
+		objName := obj.GetName()
+		var relPath string
+		relPath, err = filepath.Rel(d.GetRootPath(), filepath.Dir(objPath))
+		if err != nil {
+			return err
 		}
-		err = os.Rename(obj.GetPath(), dstPath)
+		recycleBinPath := filepath.Join(d.RecycleBinPath, relPath)
+		if !utils.Exists(recycleBinPath) {
+			err = os.MkdirAll(recycleBinPath, 0o755)
+			if err != nil {
+				return err
+			}
+		}
+
+		dstPath := filepath.Join(recycleBinPath, objName)
+		if utils.Exists(dstPath) {
+			dstPath = filepath.Join(recycleBinPath, objName+"_"+time.Now().Format("20060102150405"))
+		}
+		err = os.Rename(objPath, dstPath)
 	}
 	if err != nil {
 		return err
@@ -425,6 +431,16 @@ func (d *Local) Put(ctx context.Context, dstDir model.Obj, stream model.FileStre
 	}
 
 	return nil
+}
+
+func (d *Local) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	du, err := getDiskUsage(d.RootFolderPath)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StorageDetails{
+		DiskUsage: du,
+	}, nil
 }
 
 var _ driver.Driver = (*Local)(nil)

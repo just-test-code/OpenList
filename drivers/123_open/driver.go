@@ -17,6 +17,8 @@ import (
 type Open123 struct {
 	model.Storage
 	Addition
+	UID uint64
+	tm  *tokenManager
 }
 
 func (d *Open123) Config() driver.Config {
@@ -30,6 +32,24 @@ func (d *Open123) GetAddition() driver.Additional {
 func (d *Open123) Init(ctx context.Context) error {
 	if d.UploadThread < 1 || d.UploadThread > 32 {
 		d.UploadThread = 3
+	}
+
+	if (d.UseOnlineAPI && d.RefreshToken != "" && len(d.APIAddress) > 0) || (d.ClientID != "" && d.ClientSecret != "") {
+		// proactive refresh by renewapi or client credentials
+		d.AccessToken = ""
+		d.tm = &tokenManager{}
+	} else {
+		// 避免个人 token 刷新产生的多个登录，被动刷新
+		// 默认过期时间90天，jwt exp 不可靠
+		d.tm = &tokenManager{
+			// accessToken: d.AccessToken,
+			expiredAt: time.Now().Add(90 * 24 * time.Hour),
+		}
+	}
+
+	_, err := d.getAccessToken(false)
+	if err != nil {
+		return fmt.Errorf("init get access token error: %w", err)
 	}
 
 	return nil
@@ -83,7 +103,7 @@ func (d *Open123) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 			}, nil
 		}
 
-		u, err := d.getUserInfo()
+		uid, err := d.getUID(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +111,7 @@ func (d *Open123) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 		duration := time.Duration(d.DirectLinkValidDuration) * time.Minute
 
 		newURL, err := d.SignURL(res.Data.URL, d.DirectLinkPrivateKey,
-			u.Data.UID, duration)
+			uid, duration)
 		if err != nil {
 			return nil, err
 		}
@@ -161,6 +181,22 @@ func (d *Open123) Put(ctx context.Context, dstDir model.Obj, file model.FileStre
 	if err != nil {
 		return nil, fmt.Errorf("parse parentFileID error: %v", err)
 	}
+
+	// 尝试 SHA1 秒传
+	sha1Hash := file.GetHash().GetHash(utils.SHA1)
+	if len(sha1Hash) == utils.SHA1.Width {
+		resp, err := d.sha1Reuse(parentFileId, file.GetName(), sha1Hash, file.GetSize(), 2)
+		if err == nil && resp.Data.Reuse {
+			return File{
+				FileName: file.GetName(),
+				Size:     file.GetSize(),
+				FileId:   resp.Data.FileID,
+				Type:     2,
+				SHA1:     sha1Hash,
+			}, nil
+		}
+	}
+
 	// etag 文件md5
 	etag := file.GetHash().GetHash(utils.MD5)
 	if len(etag) < utils.MD5.Width {
@@ -213,5 +249,28 @@ func (d *Open123) Put(ctx context.Context, dstDir model.Obj, file model.FileStre
 	return nil, fmt.Errorf("upload complete timeout")
 }
 
-var _ driver.Driver = (*Open123)(nil)
-var _ driver.PutResult = (*Open123)(nil)
+func (d *Open123) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	userInfo, err := d.getUserInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: userInfo.Data.SpacePermanent + userInfo.Data.SpaceTemp,
+			UsedSpace:  userInfo.Data.SpaceUsed,
+		},
+	}, nil
+}
+
+func (d *Open123) OfflineDownload(ctx context.Context, url string, dir model.Obj, callback string) (int, error) {
+	return d.createOfflineDownloadTask(ctx, url, dir.GetID(), callback)
+}
+
+func (d *Open123) OfflineDownloadProcess(ctx context.Context, taskID int) (float64, int, error) {
+	return d.queryOfflineDownloadStatus(ctx, taskID)
+}
+
+var (
+	_ driver.Driver    = (*Open123)(nil)
+	_ driver.PutResult = (*Open123)(nil)
+)

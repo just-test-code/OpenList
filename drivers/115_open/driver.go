@@ -2,8 +2,11 @@ package _115_open
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	stdpath "path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
+	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
@@ -23,8 +27,9 @@ import (
 type Open115 struct {
 	model.Storage
 	Addition
-	client  *sdk.Client
-	limiter *rate.Limiter
+	client     *sdk.Client
+	limiter    *rate.Limiter
+	parentPath string
 }
 
 func (d *Open115) Config() driver.Config {
@@ -53,6 +58,34 @@ func (d *Open115) Init(ctx context.Context) error {
 	if d.Addition.LimitRate > 0 {
 		d.limiter = rate.NewLimiter(rate.Limit(d.Addition.LimitRate), 1)
 	}
+	if d.PageSize <= 0 {
+		d.PageSize = 200
+	} else if d.PageSize > 1150 {
+		d.PageSize = 1150
+	}
+
+	// add parent path
+	d.parentPath = "/"
+	if d.GetRootId() != d.Config().DefaultRoot {
+		folderInfo, err := d.client.GetFolderInfo(ctx, d.GetRootId())
+		if err != nil {
+			return err
+		}
+
+		if folderInfo.FileID != d.Config().DefaultRoot {
+			d.parentPath = stdpath.Join(d.parentPath, folderInfo.FileName)
+		}
+
+		parentPaths := folderInfo.Paths
+		slices.Reverse(parentPaths)
+		for _, parentPathInfo := range parentPaths {
+			if parentPathInfo.FileID == d.Config().DefaultRoot {
+				d.parentPath = stdpath.Join("/", d.parentPath)
+			} else {
+				d.parentPath = stdpath.Join("/", parentPathInfo.FileName, d.parentPath)
+			}
+		}
+	}
 	return nil
 }
 
@@ -69,7 +102,7 @@ func (d *Open115) Drop(ctx context.Context) error {
 
 func (d *Open115) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	var res []model.Obj
-	pageSize := int64(200)
+	pageSize := int64(d.PageSize)
 	offset := int64(0)
 	for {
 		if err := d.WaitLimit(ctx); err != nil {
@@ -131,12 +164,16 @@ func (d *Open115) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	}, nil
 }
 
-func (d *Open115) GetObjInfo(ctx context.Context, path string) (model.Obj, error) {
+func (d *Open115) Get(ctx context.Context, path string) (model.Obj, error) {
 	if err := d.WaitLimit(ctx); err != nil {
 		return nil, err
 	}
+	path = stdpath.Join(d.parentPath, path)
 	resp, err := d.client.GetFolderInfoByPath(ctx, path)
 	if err != nil {
+		if errors.Is(err, sdk.ErrObjectNotFound) {
+			return nil, errs.ObjectNotFound
+		}
 		return nil, err
 	}
 	return &Obj{
@@ -186,8 +223,8 @@ func (d *Open115) Rename(ctx context.Context, srcObj model.Obj, newName string) 
 		return nil, err
 	}
 	_, err := d.client.UpdateFile(ctx, &sdk.UpdateFileReq{
-		FileID:  srcObj.GetID(),
-		FileNma: newName,
+		FileID:   srcObj.GetID(),
+		FileName: newName,
 	})
 	if err != nil {
 		return nil, err
@@ -335,6 +372,27 @@ func (d *Open115) OfflineList(ctx context.Context) (*sdk.OfflineTaskListResp, er
 		return nil, err
 	}
 	return resp, nil
+}
+
+func (d *Open115) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	userInfo, err := d.client.UserInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	total, err := ParseInt64(userInfo.RtSpaceInfo.AllTotal.Size)
+	if err != nil {
+		return nil, err
+	}
+	used, err := ParseInt64(userInfo.RtSpaceInfo.AllUse.Size)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			UsedSpace:  used,
+		},
+	}, nil
 }
 
 // func (d *Open115) GetArchiveMeta(ctx context.Context, obj model.Obj, args model.ArchiveArgs) (model.ArchiveMeta, error) {

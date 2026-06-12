@@ -2,7 +2,6 @@ package ftp
 
 import (
 	"context"
-	"fmt"
 	stdpath "path"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -16,20 +15,23 @@ import (
 
 func Mkdir(ctx context.Context, path string) error {
 	user := ctx.Value(conf.UserKey).(*model.User)
+	if !user.CanFTPManage() {
+		return errs.PermissionDenied
+	}
 	reqPath, err := user.JoinPath(path)
 	if err != nil {
 		return err
 	}
-	if !user.CanWrite() || !user.CanFTPManage() {
-		meta, err := op.GetNearestMeta(stdpath.Dir(reqPath))
-		if err != nil {
-			if !errors.Is(errors.Cause(err), errs.MetaNotFound) {
-				return err
-			}
-		}
-		if !common.CanWrite(meta, reqPath) {
-			return errs.PermissionDenied
-		}
+	parentPath := stdpath.Dir(reqPath)
+	parentMeta, err := op.GetNearestMeta(parentPath)
+	if err != nil && !errors.Is(errors.Cause(err), errs.MetaNotFound) {
+		return err
+	}
+	if !user.CanWriteContent() && !common.CanWriteContentBypassUserPerms(parentMeta, parentPath) {
+		return errs.PermissionDenied
+	}
+	if !common.CanWrite(user, parentMeta, parentPath) {
+		return errs.PermissionDenied
 	}
 	return fs.MakeDir(ctx, reqPath)
 }
@@ -41,6 +43,16 @@ func Remove(ctx context.Context, path string) error {
 	}
 	reqPath, err := user.JoinPath(path)
 	if err != nil {
+		return err
+	}
+	meta, err := op.GetNearestMeta(reqPath)
+	if err != nil && !errors.Is(errors.Cause(err), errs.MetaNotFound) {
+		return err
+	}
+	if !common.CanWrite(user, meta, reqPath) {
+		return errs.PermissionDenied
+	}
+	if err = RemoveStage(reqPath); !errors.Is(err, errs.ObjectNotFound) {
 		return err
 	}
 	return fs.Remove(ctx, reqPath)
@@ -58,27 +70,36 @@ func Rename(ctx context.Context, oldPath, newPath string) error {
 	}
 	srcDir, srcBase := stdpath.Split(srcPath)
 	dstDir, dstBase := stdpath.Split(dstPath)
+	dstMeta, err := op.GetNearestMeta(dstDir)
+	if err != nil && !errors.Is(errors.Cause(err), errs.MetaNotFound) {
+		return err
+	}
 	if srcDir == dstDir {
-		if !user.CanRename() || !user.CanFTPManage() {
+		if !user.CanRename() || !user.CanFTPManage() || !common.CanWrite(user, dstMeta, dstDir) {
 			return errs.PermissionDenied
+		}
+		if err = MoveStage(srcPath, dstPath); !errors.Is(err, errs.ObjectNotFound) {
+			return err
 		}
 		return fs.Rename(ctx, srcPath, dstBase)
 	} else {
-		if !user.CanFTPManage() || !user.CanMove() || (srcBase != dstBase && !user.CanRename()) {
+		srcMeta, err := op.GetNearestMeta(srcDir)
+		if err != nil && !errors.Is(errors.Cause(err), errs.MetaNotFound) {
+			return err
+		}
+		if !user.CanMove() || !user.CanFTPManage() || (srcBase != dstBase && !user.CanRename()) || !common.CanWrite(user, srcMeta, srcDir) || !common.CanWrite(user, dstMeta, dstDir) {
 			return errs.PermissionDenied
 		}
-		if _, err = fs.Move(ctx, srcPath, dstDir); err != nil {
-			if srcBase != dstBase {
-				return err
-			}
-			if _, err1 := fs.Copy(ctx, srcPath, dstDir); err1 != nil {
-				return fmt.Errorf("failed move for %+v, and failed try copying for %+v", err, err1)
-			}
-			return nil
+		if err = MoveStage(srcPath, dstPath); !errors.Is(err, errs.ObjectNotFound) {
+			return err
 		}
 		if srcBase != dstBase {
-			return fs.Rename(ctx, stdpath.Join(dstDir, srcBase), dstBase)
+			err = fs.Rename(ctx, srcPath, dstBase, true)
+			if err != nil {
+				return err
+			}
 		}
-		return nil
+		_, err = fs.Move(ctx, stdpath.Join(srcDir, dstBase), dstDir)
+		return err
 	}
 }
